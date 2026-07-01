@@ -1,0 +1,20 @@
+# secrets — never commit
+.streamlit/secrets.toml
+
+# local dev fallback + python caches
+local_responses.csv
+local_responses_*.csv
+__pycache__/
+*.pyc
+
+# QA / fix-proposal artifacts (dev-time only, kept in the parent project)
+qa_report.csv
+qa_proposed_fixes.csv
+qa_sample.csv
+qa_smoke*.csv
+fixes_applied_log.csv
+*_run.log
+
+# macOS + remaining QA artifact
+.DS_Store
+qa_flagged.csv
