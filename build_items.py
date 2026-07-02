@@ -96,8 +96,12 @@ def main() -> None:
         if opts is None:
             continue
         # Prefer curated wording, then the dataset's full_question, then the id.
-        question = _clean_question(_cell(r, 'manual_full_question')
-                                   or _cell(r, 'full_question') or item_id)
+        raw_q = (_cell(r, 'manual_full_question') or _cell(r, 'full_question')
+                 or item_id)
+        # 'New' items are author-written — keep their wording EXACTLY. Only the
+        # large legacy codebook set gets the quote/punctuation tidy-up.
+        dataset = _cell(r, 'dataset')
+        question = raw_q if dataset == 'New' else _clean_question(raw_q)
         rows.append({
             'item_id': item_id,
             'item_text_clean': clean,
