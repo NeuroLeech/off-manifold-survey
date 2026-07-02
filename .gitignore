@@ -18,3 +18,8 @@ fixes_applied_log.csv
 # macOS + remaining QA artifact
 .DS_Store
 qa_flagged.csv
+
+# analysis outputs
+tidy_responses.csv
+session_summary.csv
+*_export.csv

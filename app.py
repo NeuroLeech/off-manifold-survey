@@ -4,10 +4,10 @@ Self-contained: reads only `collection_items.csv` (built by `build_items.py`
 from the master codebook ∩ CNP space) and writes responses via `storage.py`.
 No ML dependencies, so it deploys as a slim standalone app.
 
-Flow: welcome + consent → N randomly sampled items, each shown with its own
-native response scale, paged a few at a time with a progress bar → submit, which
-appends one row per response (keyed by `item_text_clean` so the data maps back
-onto the CNP surrogate).
+Flow: welcome + consent → short demographics → items (main sample + guaranteed
+MDES + interspersed attention checks), each shown with its own native response
+scale, paged a few at a time → done page with a completion code. Prolific URL
+parameters (PROLIFIC_PID / STUDY_ID / SESSION_ID) are captured and stored.
 
 Run locally:
     streamlit run collection_app/app.py
@@ -21,31 +21,38 @@ import uuid
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from storage import save_responses, utc_now
 
-APP_VERSION = 'collect-v1'
+APP_VERSION = 'collect-v2'
 N_ITEMS = 50            # items sampled from the main pool per participant
-MDES_PER_SESSION = 4    # guaranteed random MDES items, added on top of N_ITEMS
+MDES_PER_SESSION = 4    # guaranteed random MDES items, added on top
+N_ATTENTION = 3         # interspersed instructed-response attention checks
 PAGE_SIZE = 10          # items shown per page
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ITEMS_CSV = os.path.join(HERE, 'collection_items.csv')
 
-# --- Consent / welcome copy. Replace the bracketed parts with your study's
-# --- ethics-approved wording and contact details before collecting real data.
-WELCOME_MD = """
+INSTRUCTION = ("In this short study you'll see a series of statements and "
+               "questions. For each one, please indicate how much it describes "
+               "you, using the scale shown beneath it.")
+
+# Shown at the top of every question page as a reminder.
+PAGE_REMINDER = ("For each statement or question below, indicate how much it "
+                 "describes you using the scale shown beneath it.")
+
+WELCOME_MD = f"""
 ### Thank you for taking part
 
-In this short study you'll see a series of everyday statements. For each one,
-please indicate **how much it describes you**, using the scale shown beneath it.
+{INSTRUCTION}
 
 - There are no right or wrong answers — we're interested in your honest response.
-- It takes about **8–12 minutes** ({n} statements).
+- It takes about **15–20 minutes**.
+- Please **read each item carefully**: the study includes a few attention
+  checks, and submissions that miss them may not be approved.
 - Your responses are **anonymous**: we do not collect your name, email, or any
   identifying information.
-
----
 
 | | |
 |---|---|
@@ -62,6 +69,32 @@ CONSENT_LABEL = ('I have read the information above and agree to take part. '
                  'I understand my responses are anonymous and will be used for '
                  'research.')
 
+# Minimal demographics (all optional; first option is a non-answer).
+DEMOGRAPHICS = [
+    ('age', 'Age', ['Prefer not to say', '18–24', '25–34', '35–44',
+                    '45–54', '55–64', '65 or older']),
+    ('gender', 'Gender', ['Prefer not to say', 'Woman', 'Man', 'Non-binary',
+                          'Prefer to self-describe']),
+    ('english_first_language', 'Is English your first language?',
+     ['Prefer not to say', 'Yes', 'No']),
+]
+
+# Instructed-response attention checks use a neutral 5-point agree scale.
+ATTN_SCALE = [
+    {'value': '1', 'label': 'Strongly disagree'},
+    {'value': '2', 'label': 'Disagree'},
+    {'value': '3', 'label': 'Neither agree nor disagree'},
+    {'value': '4', 'label': 'Agree'},
+    {'value': '5', 'label': 'Strongly agree'},
+]
+
+
+def _secret(section: str, key: str, default: str) -> str:
+    try:
+        return str(st.secrets[section][key])
+    except Exception:
+        return default
+
 
 @st.cache_data(show_spinner=False)
 def load_pool() -> pd.DataFrame:
@@ -77,6 +110,14 @@ def _init_state():
     ss.setdefault('session_id', uuid.uuid4().hex)
     ss.setdefault('page', 0)
     ss.setdefault('items', None)
+    # Capture Prolific URL params once (empty for the pilot / direct links).
+    if 'prolific' not in ss:
+        qp = st.query_params
+        ss['prolific'] = {
+            'prolific_pid': qp.get('PROLIFIC_PID', ''),
+            'study_id': qp.get('STUDY_ID', ''),
+            'prolific_session_id': qp.get('SESSION_ID', ''),
+        }
 
 
 def _split_pool(pool: pd.DataFrame):
@@ -84,14 +125,24 @@ def _split_pool(pool: pd.DataFrame):
     return pool[~is_mdes], pool[is_mdes]
 
 
-def _session_size(pool: pd.DataFrame) -> int:
-    main, mdes = _split_pool(pool)
-    return min(N_ITEMS, len(main)) + min(MDES_PER_SESSION, len(mdes))
+def _attention_items(rng: random.Random, n: int) -> list[dict]:
+    checks = []
+    for i in range(n):
+        target = rng.choice(ATTN_SCALE)
+        checks.append({
+            'kind': 'attention', 'item_id': f'attention_check_{i + 1}',
+            'item_text_clean': '', 'dataset': 'attention_check',
+            'extra': 'attention', 'n_options': len(ATTN_SCALE),
+            'options': ATTN_SCALE, 'correct_label': target['label'],
+            'question': ('This is an attention check — please select '
+                         f'“{target["label"]}” for this item.'),
+        })
+    return checks
 
 
 def _sample_items(pool: pd.DataFrame, session_id: str) -> list[dict]:
-    """N_ITEMS random items from the main pool plus MDES_PER_SESSION guaranteed
-    random MDES items, shuffled together. Seeded by session_id for reproducibility."""
+    """N_ITEMS from the main pool + MDES_PER_SESSION guaranteed MDES +
+    N_ATTENTION instructed-response checks, all shuffled together."""
     rng = random.Random(session_id)
     main, mdes = _split_pool(pool)
     chosen = main.iloc[rng.sample(range(len(main)), min(N_ITEMS, len(main)))] \
@@ -99,6 +150,10 @@ def _sample_items(pool: pd.DataFrame, session_id: str) -> list[dict]:
     n_mdes = min(MDES_PER_SESSION, len(mdes))
     if n_mdes:
         chosen += mdes.iloc[rng.sample(range(len(mdes)), n_mdes)].to_dict('records')
+    for it in chosen:
+        it['kind'] = 'item'
+        it['correct_label'] = ''
+    chosen += _attention_items(rng, N_ATTENTION)
     rng.shuffle(chosen)
     return chosen
 
@@ -108,14 +163,49 @@ def _answered_count(items: list[dict]) -> int:
               if st.session_state.get(f'resp_{i}') is not None)
 
 
+def _scroll_top_if_new_page():
+    """Reset scroll to the top when the page changes (but not on every rerun,
+    so selecting an answer doesn't jump the view)."""
+    page = st.session_state.get('page', 0)
+    if st.session_state.get('_scrolled_page') != page:
+        components.html(
+            f"<script>/* page {page} */\n"
+            "const d = window.parent.document;\n"
+            "const c = d.querySelector('section.main') || "
+            "d.querySelector('[data-testid=\"stAppViewContainer\"]');\n"
+            "if (c) c.scrollTo({top: 0, behavior: 'instant'});\n"
+            "window.parent.scrollTo(0, 0);</script>", height=0)
+        st.session_state['_scrolled_page'] = page
+
+
+# --- render steps -----------------------------------------------------------
+
 def render_welcome(pool: pd.DataFrame):
     st.title('Off-Manifold: psychometric survey building')
-    st.markdown(WELCOME_MD.format(n=_session_size(pool)))
+    st.markdown(WELCOME_MD)
     agree = st.checkbox(CONSENT_LABEL, key='consent')
     if st.button('Begin', type='primary', disabled=not agree):
-        st.session_state['items'] = _sample_items(pool, st.session_state['session_id'])
+        st.session_state['stage'] = 'demographics'
+        st.rerun()
+
+
+def render_demographics(pool: pd.DataFrame):
+    st.title('About you')
+    st.caption('A few optional questions before we start. '
+               'Choose "Prefer not to say" for anything you\'d rather skip.')
+    for key, label, options in DEMOGRAPHICS:
+        st.selectbox(label, options, index=0, key=f'demo_{key}')
+    if st.button('Continue', type='primary'):
+        # Snapshot now, while the widgets exist — Streamlit drops their
+        # session_state once we leave this page.
+        st.session_state['demographics'] = {
+            key: st.session_state.get(f'demo_{key}', '')
+            for key, _label, _opts in DEMOGRAPHICS}
+        st.session_state['items'] = _sample_items(
+            pool, st.session_state['session_id'])
         st.session_state['stage'] = 'survey'
         st.session_state['page'] = 0
+        st.session_state.pop('_scrolled_page', None)
         st.rerun()
 
 
@@ -123,17 +213,19 @@ def _render_item(i: int, item: dict):
     labels = [o['label'] for o in item['options']]
     st.markdown(f"**{item['question']}**")
     st.radio('response', labels, index=None, key=f'resp_{i}',
-             horizontal=len(labels) <= 7, label_visibility='collapsed')
+             horizontal=False, label_visibility='collapsed')
     st.divider()
 
 
 def render_survey():
+    _scroll_top_if_new_page()
     items = st.session_state['items']
     n = len(items)
     page = st.session_state['page']
     n_pages = (n + PAGE_SIZE - 1) // PAGE_SIZE
     start, end = page * PAGE_SIZE, min((page + 1) * PAGE_SIZE, n)
 
+    st.info(PAGE_REMINDER)
     answered = _answered_count(items)
     st.progress(answered / n, text=f'{answered} / {n} answered')
     st.caption(f'Page {page + 1} of {n_pages}')
@@ -141,21 +233,14 @@ def render_survey():
     for i in range(start, end):
         _render_item(i, items[i])
 
-    page_unanswered = [i for i in range(start, end)
-                       if st.session_state.get(f'resp_{i}') is None]
-
     cols = st.columns(2)
     if page > 0 and cols[0].button('← Back'):
         st.session_state['page'] -= 1
         st.rerun()
 
     last = page == n_pages - 1
-    label = 'Submit' if last else 'Next →'
-    if cols[1].button(label, type='primary'):
-        if page_unanswered:
-            st.warning('Please answer every statement on this page before '
-                       'continuing.')
-        elif last:
+    if cols[1].button('Submit' if last else 'Next →', type='primary'):
+        if last:
             _submit(items)
         else:
             st.session_state['page'] += 1
@@ -165,21 +250,38 @@ def render_survey():
 def _submit(items: list[dict]):
     ss = st.session_state
     ts = utc_now()
+    prolific = ss.get('prolific', {})
+    consent = bool(ss.get('consent'))
+
+    def base_row(**kw) -> dict:
+        row = {'session_id': ss['session_id'], 'timestamp_utc': ts,
+               'consent': consent, **prolific, 'app_version': APP_VERSION}
+        row.update(kw)
+        return row
+
     rows = []
+    # demographics (snapshotted at the Continue step)
+    demo = ss.get('demographics', {})
+    for key, label, _opts in DEMOGRAPHICS:
+        val = demo.get(key, '')
+        rows.append(base_row(kind='demographic', item_id=key, question=label,
+                             response_label=val, response_value=val))
+    # items + attention checks
     for i, item in enumerate(items):
-        chosen_label = ss.get(f'resp_{i}')
+        chosen = ss.get(f'resp_{i}')
         value = next((o['value'] for o in item['options']
-                      if o['label'] == chosen_label), '')
-        rows.append({
-            'session_id': ss['session_id'], 'timestamp_utc': ts,
-            'consent': bool(ss.get('consent')), 'position': i,
-            'item_id': item['item_id'],
-            'item_text_clean': item['item_text_clean'],
-            'dataset': item['dataset'], 'extra': item.get('extra', ''),
-            'question': item['question'],
-            'response_value': value, 'response_label': chosen_label,
-            'n_options': item['n_options'], 'app_version': APP_VERSION,
-        })
+                      if o['label'] == chosen), '')
+        check_passed = ''
+        if item.get('kind') == 'attention':
+            check_passed = str(chosen == item.get('correct_label'))
+        rows.append(base_row(
+            kind=item.get('kind', 'item'), position=i,
+            item_id=item['item_id'], item_text_clean=item.get('item_text_clean', ''),
+            dataset=item['dataset'], extra=item.get('extra', ''),
+            question=item['question'], response_value=value,
+            response_label=chosen, n_options=item['n_options'],
+            check_passed=check_passed))
+
     with st.spinner('Saving your responses…'):
         backend, detail = save_responses(rows)
     ss['save_backend'] = backend
@@ -190,9 +292,12 @@ def _submit(items: list[dict]):
 
 def render_done():
     st.title('All done — thank you! 🎉')
-    st.markdown('Your responses have been recorded. You may now close this tab.')
-    backend = st.session_state.get('save_backend')
-    if backend == 'local':
+    code = _secret('prolific', 'completion_code', 'PILOT-COMPLETE')
+    st.markdown('Your responses have been recorded.')
+    st.success(f'Your completion code is:  **{code}**')
+    st.markdown('Please copy this code back into Prolific to confirm your '
+                'participation. You may then close this tab.')
+    if st.session_state.get('save_backend') == 'local':
         st.info('Note: responses were saved to a local file (the cloud Sheet '
                 'is not configured). Detail: '
                 f'`{st.session_state.get("save_detail")}`')
@@ -203,8 +308,7 @@ def main():
     st.set_page_config(page_title='Off-Manifold survey', page_icon='📝')
     _init_state()
     # Preserve answered radios across page navigation: Streamlit drops the
-    # session_state entry for any widget not rendered in the current run, so
-    # without this "touch" only the current page's answers would survive.
+    # session_state entry for any widget not rendered in the current run.
     for k in list(st.session_state.keys()):
         if k.startswith('resp_'):
             st.session_state[k] = st.session_state[k]
@@ -212,6 +316,8 @@ def main():
     stage = st.session_state['stage']
     if stage == 'welcome':
         render_welcome(pool)
+    elif stage == 'demographics':
+        render_demographics(pool)
     elif stage == 'survey':
         render_survey()
     else:

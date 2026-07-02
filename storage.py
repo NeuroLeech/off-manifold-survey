@@ -24,12 +24,14 @@ from datetime import datetime, timezone
 
 import streamlit as st
 
-# Column order written to the sheet / CSV. One row per (participant, item).
+# Column order written to the sheet / CSV. One row per (participant, item /
+# attention-check / demographic).
 COLUMNS = [
     'session_id', 'timestamp_utc', 'consent',
-    'position', 'item_id', 'item_text_clean', 'dataset', 'extra', 'question',
-    'response_value', 'response_label', 'n_options',
-    'app_version',
+    'prolific_pid', 'study_id', 'prolific_session_id',
+    'kind', 'position', 'item_id', 'item_text_clean', 'dataset', 'extra',
+    'question', 'response_value', 'response_label', 'n_options',
+    'check_passed', 'app_version',
 ]
 
 LOCAL_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -64,11 +66,21 @@ def _worksheet():
         sh = (gc.open_by_url(sheet_cfg['url']) if 'url' in sheet_cfg
               else gc.open_by_key(sheet_cfg['id']))
         ws_name = sheet_cfg.get('worksheet', 'responses')
-        try:
-            ws = sh.worksheet(ws_name)
-        except Exception:
-            ws = sh.add_worksheet(title=ws_name, rows=1000, cols=len(COLUMNS))
-        if not ws.row_values(1):
+
+        def get_or_create(name):
+            try:
+                return sh.worksheet(name)
+            except Exception:
+                return sh.add_worksheet(title=name, rows=2000, cols=len(COLUMNS))
+
+        ws = get_or_create(ws_name)
+        head = ws.row_values(1)
+        # If the existing tab has a different (older) schema, don't misalign into
+        # it — route to a sibling "<name>_v2" tab so prior data stays intact.
+        if head and head != COLUMNS:
+            ws = get_or_create(f'{ws_name}_v2')
+            head = ws.row_values(1)
+        if not head:
             ws.append_row(COLUMNS, value_input_option='RAW')
         return ws, None
     except Exception as e:  # noqa: BLE001

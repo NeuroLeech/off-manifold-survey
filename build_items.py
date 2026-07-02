@@ -41,6 +41,25 @@ def _cell(r, col) -> str:
     return '' if pd.isna(v) else str(v).strip()
 
 
+_QUOTE_PAIRS = [('"', '"'), ("'", "'"), ('“', '”'), ('‘', '’')]
+
+
+def _clean_question(q: str) -> str:
+    """Tidy an item's displayed text: collapse doubled double-quotes, strip any
+    surrounding quotes, and ensure it ends with sentence punctuation."""
+    q = str(q).strip().replace('""', '"')
+    changed = True
+    while changed and len(q) >= 2:                 # peel surrounding quote pairs
+        changed = False
+        for a, b in _QUOTE_PAIRS:
+            if q[0] == a and q[-1] == b:
+                q = q[1:-1].strip()
+                changed = True
+    if q and q[-1] not in '.?!:…':            # add a full stop if unterminated
+        q += '.'
+    return q
+
+
 def _options(r) -> list[dict] | None:
     """Ordered value/label pairs for the item, or None if the scale is invalid."""
     try:
@@ -77,8 +96,8 @@ def main() -> None:
         if opts is None:
             continue
         # Prefer curated wording, then the dataset's full_question, then the id.
-        question = (_cell(r, 'manual_full_question') or _cell(r, 'full_question')
-                    or item_id)
+        question = _clean_question(_cell(r, 'manual_full_question')
+                                   or _cell(r, 'full_question') or item_id)
         rows.append({
             'item_id': item_id,
             'item_text_clean': clean,
