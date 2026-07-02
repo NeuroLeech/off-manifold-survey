@@ -164,18 +164,38 @@ def _answered_count(items: list[dict]) -> int:
 
 
 def _scroll_top_if_new_page():
-    """Reset scroll to the top when the page changes (but not on every rerun,
-    so selecting an answer doesn't jump the view)."""
+    """Jump to the top of the page when the page changes (but not on every
+    rerun, so selecting an answer doesn't yank the view). Version-agnostic:
+    scrolls this component's own frame into view plus every candidate scroll
+    container, retried briefly to beat Streamlit's post-render scroll."""
     page = st.session_state.get('page', 0)
-    if st.session_state.get('_scrolled_page') != page:
-        components.html(
-            f"<script>/* page {page} */\n"
-            "const d = window.parent.document;\n"
-            "const c = d.querySelector('section.main') || "
-            "d.querySelector('[data-testid=\"stAppViewContainer\"]');\n"
-            "if (c) c.scrollTo({top: 0, behavior: 'instant'});\n"
-            "window.parent.scrollTo(0, 0);</script>", height=0)
-        st.session_state['_scrolled_page'] = page
+    if st.session_state.get('_scrolled_page') == page:
+        return
+    st.session_state['_scrolled_page'] = page
+    components.html(
+        f"""<script>
+(function() {{
+  var marker = "page-{page}";
+  function toTop() {{
+    try {{ if (window.frameElement) window.frameElement.scrollIntoView(
+             {{block: 'start', behavior: 'auto'}}); }} catch (e) {{}}
+    try {{
+      var d = window.parent.document;
+      var sels = ['section.main', '[data-testid="stMain"]',
+                  '[data-testid="stAppViewContainer"]', '.main',
+                  'html', 'body'];
+      for (var i = 0; i < sels.length; i++) {{
+        var el = d.querySelector(sels[i]);
+        if (el) {{ if (el.scrollTo) el.scrollTo(0, 0); el.scrollTop = 0; }}
+      }}
+      window.parent.scrollTo(0, 0);
+    }} catch (e) {{}}
+  }}
+  toTop();
+  var n = 0, id = setInterval(function () {{ toTop(); if (++n > 15)
+      clearInterval(id); }}, 40);
+}})();
+</script>""", height=0)
 
 
 # --- render steps -----------------------------------------------------------
