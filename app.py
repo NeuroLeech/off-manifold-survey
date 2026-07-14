@@ -34,9 +34,13 @@ PAGE_SIZE = 10          # items shown per page
 HERE = os.path.dirname(os.path.abspath(__file__))
 ITEMS_CSV = os.path.join(HERE, 'collection_items.csv')
 
-INSTRUCTION = ("In this short study you'll see a series of statements and "
-               "questions. For each one, please indicate how much it describes "
-               "you, using the scale shown beneath it.")
+PURPOSE = ("This study is part of research **evaluating deep-learning models of "
+           "psychology survey items** — how well such models can anticipate the "
+           "way people respond to everyday statements and questions.")
+
+INSTRUCTION = ("You'll see a series of statements and questions. For each one, "
+               "please indicate how much it describes you, using the scale shown "
+               "beneath it.")
 
 # Shown at the top of every question page as a reminder.
 PAGE_REMINDER = ("For each statement or question below, indicate how much it "
@@ -44,6 +48,8 @@ PAGE_REMINDER = ("For each statement or question below, indicate how much it "
 
 WELCOME_MD = f"""
 ### Thank you for taking part
+
+{PURPOSE}
 
 {INSTRUCTION}
 
@@ -312,11 +318,16 @@ def _submit(items: list[dict]):
 
 def render_done():
     st.title('All done — thank you! 🎉')
-    code = _secret('prolific', 'completion_code', 'PILOT-COMPLETE')
-    st.markdown('Your responses have been recorded.')
-    st.success(f'Your completion code is:  **{code}**')
-    st.markdown('Please copy this code back into Prolific to confirm your '
-                'participation. You may then close this tab.')
+    st.markdown('Your responses have been recorded. Thank you for taking part.')
+    # A completion code is shown only when one is configured (for a recruitment
+    # platform); otherwise participants can simply close the tab.
+    code = _secret('prolific', 'completion_code', '')
+    if code:
+        st.success(f'Your completion code is:  **{code}**')
+        st.markdown('Please use this code to confirm your participation, then '
+                    'you may close this tab.')
+    else:
+        st.markdown('You may now close this tab.')
     if st.session_state.get('save_backend') == 'local':
         st.info('Note: responses were saved to a local file (the cloud Sheet '
                 'is not configured). Detail: '
