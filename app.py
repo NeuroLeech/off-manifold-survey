@@ -34,9 +34,8 @@ PAGE_SIZE = 10          # items shown per page
 HERE = os.path.dirname(os.path.abspath(__file__))
 ITEMS_CSV = os.path.join(HERE, 'collection_items.csv')
 
-PURPOSE = ("This study is part of research **evaluating deep-learning models of "
-           "psychology survey items** — how well such models can anticipate the "
-           "way people respond to everyday statements and questions.")
+PURPOSE = ("This study is part of research on **how AI models understand the "
+           "way people answer survey questions**.")
 
 INSTRUCTION = ("You'll see a series of statements and questions. For each one, "
                "please indicate how much it describes you, using the scale shown "
