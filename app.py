@@ -6,7 +6,8 @@ No ML dependencies, so it deploys as a slim standalone app.
 
 Flow: welcome + consent → short demographics → items (main sample + guaranteed
 MDES + interspersed attention checks), each shown with its own native response
-scale, paged a few at a time → done page with a completion code. Prolific URL
+scale, paged a few at a time → done page with the completion codes for each
+recruitment platform (Prolific / SurveySwap / SurveyCircle). Prolific URL
 parameters (PROLIFIC_PID / STUDY_ID / SESSION_ID) are captured and stored.
 
 Run locally:
@@ -21,15 +22,23 @@ import uuid
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 from storage import save_responses, utc_now
 
-APP_VERSION = 'collect-v2'
+APP_VERSION = 'collect-v3'   # v3: consent snapshot fixed, item pool rebuilt
 N_ITEMS = 50            # items sampled from the main pool per participant
 MDES_PER_SESSION = 4    # guaranteed random MDES items, added on top
 N_ATTENTION = 3         # interspersed instructed-response attention checks
 PAGE_SIZE = 10          # items shown per page
+
+# Completion codes shown on the final page, one per recruitment platform.
+# Fill these in with the code each platform issues for this study (or override
+# them in secrets under [recruitment] — see .streamlit/secrets.toml.example).
+# A blank code hides that platform's block, so unused platforms cost nothing.
+SURVEYSWAP_CODE = 'GNJS-RMYT-A7QI'
+SURVEYSWAP_URL = 'https://surveyswap.io/sr/GNJS-RMYT-A7QI'
+SURVEYCIRCLE_CODE = 'KYF6-D6NX-4BFR-YW87'
+SURVEYCIRCLE_URL = 'https://www.surveycircle.com/KYF6-D6NX-4BFR-YW87/'
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ITEMS_CSV = os.path.join(HERE, 'collection_items.csv')
@@ -177,7 +186,7 @@ def _scroll_top_if_new_page():
     if st.session_state.get('_scrolled_page') == page:
         return
     st.session_state['_scrolled_page'] = page
-    components.html(
+    st.iframe(
         f"""<script>
 (function() {{
   var marker = "page-{page}";
@@ -200,7 +209,7 @@ def _scroll_top_if_new_page():
   var n = 0, id = setInterval(function () {{ toTop(); if (++n > 15)
       clearInterval(id); }}, 40);
 }})();
-</script>""", height=0)
+</script>""", height=1)   # st.iframe requires height >= 1
 
 
 # --- render steps -----------------------------------------------------------
@@ -210,6 +219,14 @@ def render_welcome(pool: pd.DataFrame):
     st.markdown(WELCOME_MD)
     agree = st.checkbox(CONSENT_LABEL, key='consent')
     if st.button('Begin', type='primary', disabled=not agree):
+        # Snapshot to a NON-widget key. Streamlit drops the session_state entry
+        # for any widget not rendered in the current run, so by the time
+        # _submit() runs on the items page the 'consent' key is gone and
+        # bool(ss.get('consent')) is False -- which is why every session in
+        # responses_v2.csv recorded consent=FALSE despite the button being
+        # disabled until the box is ticked. Same pattern the demographics page
+        # already uses.
+        st.session_state['consent_given'] = bool(agree)
         st.session_state['stage'] = 'demographics'
         st.rerun()
 
@@ -276,7 +293,7 @@ def _submit(items: list[dict]):
     ss = st.session_state
     ts = utc_now()
     prolific = ss.get('prolific', {})
-    consent = bool(ss.get('consent'))
+    consent = bool(ss.get('consent_given'))
 
     def base_row(**kw) -> dict:
         row = {'session_id': ss['session_id'], 'timestamp_utc': ts,
@@ -315,16 +332,35 @@ def _submit(items: list[dict]):
     st.rerun()
 
 
+def _completion_codes() -> list[tuple[str, str, str]]:
+    """(platform, code, url) for every platform with a code configured."""
+    configured = [
+        ('Prolific', _secret('prolific', 'completion_code', ''), ''),
+        ('SurveySwap',
+         _secret('recruitment', 'surveyswap_code', SURVEYSWAP_CODE),
+         _secret('recruitment', 'surveyswap_url', SURVEYSWAP_URL)),
+        ('SurveyCircle',
+         _secret('recruitment', 'surveycircle_code', SURVEYCIRCLE_CODE),
+         _secret('recruitment', 'surveycircle_url', SURVEYCIRCLE_URL)),
+    ]
+    return [(name, code, url) for name, code, url in configured if code]
+
+
 def render_done():
     st.title('All done — thank you! 🎉')
     st.markdown('Your responses have been recorded. Thank you for taking part.')
-    # A completion code is shown only when one is configured (for a recruitment
-    # platform); otherwise participants can simply close the tab.
-    code = _secret('prolific', 'completion_code', '')
-    if code:
-        st.success(f'Your completion code is:  **{code}**')
-        st.markdown('Please use this code to confirm your participation, then '
-                    'you may close this tab.')
+    # Completion codes are shown only for the platforms that have one
+    # configured; participants use whichever one they came from.
+    codes = _completion_codes()
+    if codes:
+        if len(codes) > 1:
+            st.markdown('If you found this study through one of the sites '
+                        'below, use its code to confirm your participation:')
+        for name, code, url in codes:
+            st.success(f'**{name}** completion code:  **{code}**')
+            if url:
+                st.markdown(f'[Return to {name} to claim your credit]({url})')
+        st.markdown('Once you have used your code, you may close this tab.')
     else:
         st.markdown('You may now close this tab.')
     if st.session_state.get('save_backend') == 'local':

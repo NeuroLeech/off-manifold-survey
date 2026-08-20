@@ -4,8 +4,11 @@ Produces `collection_items.csv`, the items presented to participants. Two
 sources, unioned:
 
 1. **Codebook items in CNP space** — rows with `USE == TRUE` whose
-   `item_text_clean` is present in `cnp_embeddings.csv`. Responses to these map
-   straight back onto the 32-d surrogate for retraining.
+   `item_text_clean` is present in the CNP embedding table. Responses to these
+   map straight back onto the surrogate for retraining. The table is
+   `--cnp` or, by default, `config.CNP_EMBEDDINGS_PATH` (currently the d=16
+   BOpt space). It used to be hardcoded to `cnp_embeddings.csv`, the d=32
+   table retired in Aug 2026, which left this script unrunnable.
 2. **New items** — every row with `dataset == 'New'`, regardless of `USE` or CNP
    membership. These are freshly added measures (tagged in the `Extra` column,
    e.g. MDES / BDI / ESS) that have no data yet; we include them so this study
@@ -22,16 +25,36 @@ The deployed app reads only the resulting CSV — it never needs the codebook.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import sys
 
 import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, '..', 'data')
 CODEBOOK = os.path.join(DATA, 'master_codebook.csv')
-CNP = os.path.join(DATA, 'cnp_embeddings.csv')
 OUT = os.path.join(HERE, 'collection_items.csv')
+
+# Default to the parent project's canonical embedding table when it is
+# importable; a standalone deploy of collection_app never runs this script.
+_DEFAULT_CNP = os.path.join(DATA, 'cnp_emb_bopt_d16_c002.csv')
+try:
+    sys.path.insert(0, os.path.join(HERE, '..'))
+    import config as _config
+    _DEFAULT_CNP = _config.CNP_EMBEDDINGS_PATH
+except Exception:
+    pass
+
+_ap = argparse.ArgumentParser(description=__doc__)
+_ap.add_argument('--cnp', default=_DEFAULT_CNP,
+                 help='CNP embedding CSV whose item_prompt column defines '
+                      'which codebook items are modellable')
+_ap.add_argument('--out', default=OUT)
+_ARGS, _ = _ap.parse_known_args()
+CNP = _ARGS.cnp
+OUT = _ARGS.out
 
 MIN_OPTIONS, MAX_OPTIONS = 2, 10
 

@@ -50,6 +50,16 @@ and re-commit:
 python collection_app/build_items.py      # rewrites collection_items.csv
 ```
 
+## Recruitment-platform completion codes
+The final page shows a completion code for each platform that has one
+configured — Prolific, [SurveySwap](https://surveyswap.io) and
+[SurveyCircle](https://www.surveycircle.com). Register the study on the
+platform, then either fill the code into the constants at the top of `app.py`
+(`SURVEYSWAP_CODE`, `SURVEYCIRCLE_CODE`, and their optional `_URL` redirect
+links) or set them in secrets under `[prolific]` / `[recruitment]` — see
+`.streamlit/secrets.toml.example`. Platforms with no code configured are
+hidden, so participants only ever see the codes you've set up.
+
 ## Before collecting real data
 Edit `WELCOME_MD` and `CONSENT_LABEL` in `app.py` to add your study title,
 institution, ethics-approval reference, and a contact email. Tune `N_ITEMS`
