@@ -43,12 +43,23 @@ SURVEYCIRCLE_URL = 'https://www.surveycircle.com/KYF6-D6NX-4BFR-YW87/'
 HERE = os.path.dirname(os.path.abspath(__file__))
 ITEMS_CSV = os.path.join(HERE, 'collection_items.csv')
 
-PURPOSE = ("This study is part of research on **how AI models understand the "
-           "way people answer survey questions**.")
+PURPOSE = ("This study is part of research on **understanding the links between "
+           "different psychological questionnaires**, including ones that are very "
+           "different from each other, measuring very different psychological "
+           "constructs. Here we are evaluating how well our model of the "
+           "relationships between questionnaires works.")
 
-INSTRUCTION = ("You'll see a series of statements and questions. For each one, "
-               "please indicate how much it describes you, using the scale shown "
+INSTRUCTION = ("You will see a series of statements or questions taken from "
+               "standard psychology assessments, but presented in a random order. "
+               "For each one, please read it and choose the response that best "
+               "indicates how much it describes you, using the scale shown "
                "beneath it.")
+
+CAVEAT = ("The questions are taken from hundreds of psychology questionnaires. "
+          "The answers may vary from question to question. This is preliminary "
+          "research, there will be some typos and some of the questions may "
+          "contain errors or not make much sense on their own. You do not need "
+          "to answer if a question does not make sense.")
 
 # Shown at the top of every question page as a reminder.
 PAGE_REMINDER = ("For each statement or question below, indicate how much it "
@@ -61,12 +72,14 @@ WELCOME_MD = f"""
 
 {INSTRUCTION}
 
+{CAVEAT}
+
 - There are no right or wrong answers — we're interested in your honest response.
-- It takes about **15–20 minutes**.
-- Please **read each item carefully**: the study includes a few attention
-  checks, and submissions that miss them may not be approved.
+- It should take about **10–15 minutes**.
+- Please **read each item carefully**: the study includes a few attention checks.
 - Your responses are **anonymous**: we do not collect your name, email, or any
-  identifying information.
+  identifying information. We only receive your responses at the end when you
+  press submit.
 
 | | |
 |---|---|
